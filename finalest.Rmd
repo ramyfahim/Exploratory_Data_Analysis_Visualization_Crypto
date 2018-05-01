@@ -1,0 +1,1350 @@
+---
+title: "Final_project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE,
+                      message = FALSE, 
+                      cache = TRUE,
+                      results = 'hide')
+```
+
+## Introduction
+
+We want to explore and answer questions pertaining to cryptocurrency investment. We also want to answer questions about possible existing relations between the cryptocurrency market and the stock market. We are interested in this topic because of the contemporary implications.
+
+The questions we ask are:
+
+* How do the bitcoin market and the stock market behave?
+
+* How have their prices changed, and the volumes of trades changed?
+
+* What is the seasonal behavior of the assets across years, months, weeks?
+
+* Are the assets correlated? What can we say about this?
+
+* How can we analyze the variance of these assets and how has that changed over time?
+
+* What do the returns look like for an investor interested in these asset classes?
+
+Teammates:
+
+Ramy Fahim - rf2647
+Ikya Jupudy - ij2205
+Rakshita Nagalla - rn2439
+
+Contributions:
+
+Ramy: variance charts, investment strategies, investment returns charts, writing descriptions and walkthroughs of various graphs, writing executive summary
+
+Ikya: market cap tree map, bar chart, recent price trends, event research, Shiny app interactive visualizations, writing executive summary
+
+Rakshita: data quality analysis, charts of price and volume comparison, seasonal plots, correlation chart, d3 interactive visualizations, writing executive summary
+
+
+## Description of the Data
+
+There are plenty of resources to access financial market data online, and several resources to access cryptocurrency data.
+
+For the different cryptocurrency market capitalization figures, we used the R library coinmarketcapr and crypto to collect and access this.
+
+Additionally for the price and volume of bitcoin, we used the R library coinmarketcapr to collect and access this data.
+
+For the stock market data, including price and volume, we used the S&P index data from 2013 to 2018, collected from tidyquant, and in certain points of the report we used the same data downloaded from a csv from nasdaq.com.
+
+## Analysis of Data Quality
+
+```{r}
+library(forecast)
+library(tidyquant)  
+
+#get bitcoin data
+btc <- read.csv("/Users/rakshitanagalla/Desktop/Spring 2018/EDAV/Project/btc.csv")
+btc$Date <- as.Date(btc$Date,format="%d-%b-%y")
+
+#convert bitcoin data to xts object
+btc[,2:7] <- apply(apply(btc[,2:7], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc.xts <- as.xts(btc[,2:7], order.by = btc$Date)
+
+#get stock data
+x <- getSymbols("^GSPC", src = "yahoo", from = min(btc$Date), to = max(btc$Date))
+
+#join bitcoin and stock data using outer join of dates
+whole = merge(btc.xts,GSPC,join = "outer")
+
+#volume of bitcoin vs stock
+head(whole,3)
+```
+
+We see that frequency is daily. 
+
+```{r}
+library(mi)
+x <- missing_data.frame(coredata(whole))
+image(x)
+```
+
+We see that some observations are missing all the S&P variables but have bitcoin data. Moreover, bitcoin volume data is missing for a few observations. Let us order the observations by time to see if there is a temporal trend to the missingness. 
+
+```{r}
+library(Amelia)
+missmap(as.data.frame(coredata(whole)))
+#is.atomic(coredata(whole))
+```
+
+We observe that first few observations are missing Bitcoin volume data and stock market data is missing at regular intervals. On closer observation, we see that Bitcoin volume data is only available from 26th December 2013. The volume data is missing at regular intervals. 
+
+```{r}
+date <- index(whole)[is.na(whole[,"GSPC.Close"])]
+table(wday(date,label=TRUE))
+```
+
+Mostly Weekends! Because stock market doesnot operate on weekends and on holidays but bitcoin operates 24*7.
+
+We handle these missing values carefully throughout our analysis either by omitting those observations when calculating joint summaries or by leaving gaps in the plots. We dont omit the observations with missing values right away so that we don't missout on interesting trends.
+
+## Main Analysis (Exploratory Data Analysis)
+
+Visualizing marketshare split of cryptocurrencies 
+
+```{r}
+library(coinmarketcapr)
+library(treemap)
+
+market_today <- get_marketcap_ticker_all()
+
+df1 <- na.omit(market_today[,c('id','market_cap_usd')])
+df1$market_cap_usd <- as.numeric(df1$market_cap_usd)
+df1$formatted_market_cap <-  paste0(df1$id,'\n','$',format(df1$market_cap_usd,big.mark = ',',scientific = F, trim = T))
+treemap(df1, index = 'formatted_market_cap', vSize = 'market_cap_usd', title = 'Cryptocurrency Market Cap', fontsize.labels=c(12, 8), palette='RdYlGn')
+```
+
+
+The area of each tile represents the proportion of marketcap that particular cryptocurrency holds. Color blind friendly colors were used only to distinguish between currencies. We observe from the above tree map that as of today, more than 50% of the Cryptocurrency market cap is occupied by Bitcoin, Ethereum, Ripple, Bitcoin-cash and EOS. We visualise them further, how have they evolved over the past 5 years.
+
+
+Relative market cap distributions for top 5 cryptocurrencies over 2013-present
+
+```{r, message=F, warning=F}
+library(crypto)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(memisc)
+Bitcoin <- getCoins("BTC")
+Ethereum <- getCoins("ETH")
+Ripple <- getCoins("XRP")
+Bitcoin_cash <- getCoins("BCH")
+Eos <- getCoins("EOS")
+data <- merge(Bitcoin,Ethereum,all = TRUE)
+data <- merge(data,Ripple,all = TRUE)
+data <- merge(data,Bitcoin_cash,all = TRUE)
+data <- merge(data,Eos,all = TRUE)
+
+grp_year <- data %>% group_by(name,yr = year(date)) %>% summarise(avg_cap = mean(market))
+ggplot(grp_year)+ geom_bar(aes(x=yr,y=avg_cap,fill = name),stat="identity",position = position_dodge())
+```
+
+
+From the above barplot, we can conclude that all cryptocurrencies have been performing well from 2013 until now as their respective market cap has been increasing over the consecutive years.
+Some trends we observe here are:-
+* Bitcoin and Ripple have been present in the market since 2013
+* Ethereum enters to the cryptocurrency market in 2015
+* Bitcoin-cash and EOS have been very new additions to the crypto market since August 2017 and June 2017 resepectively. Bitcoin Cash split the main Bitcoin blockchain creating a diversion in blockchains in mid 2017.
+* (Is this necessary?) EOS was started by Dan Larimer the founder and creator of Bitshares as well as Steem. It was first announced by Dan at the Consensus 2017 with an odd ICO launch
+* While the marketcap of all of them has been growing consistently, bitcoins' growth has been exponential. 
+
+
+Plotting the recent Bitcoin trends(Jan 2017 - present)
+
+```{r, message=F, warning=F}
+
+Bitcoin <- getCoins("BTC")
+Bitcoin$year <- substring(Bitcoin$date,1,4)
+bitcoin_events <- Bitcoin[Bitcoin$year == "2017" | Bitcoin$year == "2018", ]
+plot(bitcoin_events$date,bitcoin_events$close, type = "l",ylab = "Bitcoin Close price" , xlab = "Jan 2017-April 2018", main = "Recent Bitcoin price trends")
+abline(v=as.Date("2017-11-12"),col = "black",lty=2)
+pt1 <- bitcoin_events[bitcoin_events$date == "2017-11-12","close"]
+dt1 <- as.Date("2017-11-12")
+abline(v=as.Date("2017-12-16"),col = "black",lty=2)
+pt2 <- bitcoin_events[bitcoin_events$date == "2017-12-16","close"]
+dt2 <- as.Date("2017-12-16")
+abline(v=as.Date("2018-02-06"),col = "black",lty=2)
+pt3 <- bitcoin_events[bitcoin_events$date == "2018-02-06","close"]
+dt3 <- as.Date("2018-02-06")
+x1 <- c(as.Date("2017-11-12"),as.Date("2017-12-16"))
+y1 <- c(pt1,pt2)
+x2 <- c(as.Date("2017-12-16"),as.Date("2018-02-06"))
+y2 <- c(pt2,pt3)
+lines(x1,y1,col="green",lwd = 2)
+lines(x2,y2,col="red",lwd = 2)
+text(x1[1],y1[1],y1[1],pos = 1,cex=0.5)
+text(x1[2],y1[2],y1[2],pos = 4,cex=0.5)
+text(x2[2],y2[2],y2[2],pos = 1,cex=0.5)
+legend(as.Date("2017-01-01"),15000, legend=c("Bitcoin price increases by 300%", "Steepest fall in history"),col=c("green", "red"), lty=1:2, cex=0.8)
+axis(side=3, at=as.Date("2017-11-12"), labels="12 Nov",cex.axis = 0.7)
+axis(side=3, at=as.Date("2017-12-16"), labels="16 Dec",cex.axis = 0.7)
+axis(side=3, at=as.Date("2018-02-06"), labels="02 Feb",cex.axis = 0.7)
+```
+
+
+On a macro level, bitcoin's price trajectory has been influenced by increased online 
+chatter, the enthusiasm of Asian investors for the cryptocurrency, and the coming start date for bitcoin futures. Institutional traders, who are the main clients for futures trading, are expected to increase liquidity and price stability for the cryptocurrency.
+
+The run-up in bitcoin price from November 2017 to December 2017 was largely construed as excitement over the trading at CBOE (December 10,2017) and CME (December 18,2017). Futures trading is also a prelude to wider mainstream acceptance of bitcoin as a store of value.
+
+The crash in Bitcoin's price from December 2017 until February 2018 can be accounted by many factors - 
+
+* South Korea's clampdown of bitcoin has been a significant factor in its sharp value decline.   It  demanded that the veil of secrecy surrounding bitcoin transactions be removed as the      government planned to only allow accounts with a users' real-name to be used in               transactions.The country's customs service said that it had uncovered cryptocurrency crimes   worth 637.5 billion won ($594.35 million).
+
+* Facebook said Tuesday that it was banning ads that promote cryptocurrencies. The social networking giant said it is trying to stop the promotion of "financial products and services frequently associated with misleading or deceptive promotional practices.
+
+* The U.S. Securities and Exchange Commission said it had obtained a court order to halt and    freeze the assets of what is likely the largest initial coin offering ever.
+
+Source :- https://www.investopedia.com/news/what-was-behind-bitcoins-insane-price-moves-dec-7/
+          https://www.cnbc.com/2018/01/31/bitcoin-is-heading-for-its-biggest-monthly-decline-since-january-2015.html
+
+
+
+```{r}
+library(forecast)
+library(tidyquant)  # Loads tidyverse, tidyquant, financial pkgs, xts/zoo
+
+#get bitcoin data
+btc <- read.csv("btc.csv")
+btc$Date <- as.Date(btc$Date,format="%d-%b-%y")
+
+#convert bitcoin data to xts object
+btc[,2:7] <- apply(apply(btc[,2:7], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc.xts <- as.xts(btc[,2:7], order.by = btc$Date)
+
+#get stock data
+x <- getSymbols("^GSPC", src = "yahoo", from = min(btc$Date), to = max(btc$Date))
+
+#join bitcoin and stock data using outer join of dates
+whole = merge(btc.xts,GSPC,join = "outer")
+Volume = whole[,c("Volume","GSPC.Volume")]
+colnames(Volume) <- c("Bitcoin", "S&P 500")
+#volume of bitcoin vs stock
+plot(Volume, legend.loc = "topleft", auto.legend=TRUE)
+```
+
+First we plot a measure of volume. The red line is the volume of assets bought and sold in the S&P. The black line is the volume of bitcoin assets bought and sold. Our dataset contained no volume data for bitcoin prior to 2014. The volume of assets traded
+in the stock market (S&P) is quite variable, but is consistently within a band or range of values through 2013-2018. Bitcoin, on the other hand, is operating on very low volumes compared to the stock market until mid 2017 when the volume skyrocketed. The volume went up to be over 5 times the volume of the stock market, and it has since then declined to levels similar to those of the S&P. Gaps visible in the red line correspond to weekends or holidays, during which the stock market is closed for trading.
+
+
+```{r}
+#closing price of bitcoin vs stock
+ClosingPrice = whole[,c("Close","GSPC.Close")]
+colnames(ClosingPrice) <- c("Bitcoin", "S&P 500")
+#closing price of bitcoin vs stock
+plot(ClosingPrice, legend.loc = "topleft", auto.legend=TRUE)
+```
+
+Next we plot the price, collected on a daily scale, of bitcoin and the S&P. The red line is the price of the S&P index over time, and the black line is the price of bitcoin over time. As expected, this looks similar to the volume plot. The reason the plots are similar is because in 2017, many people, many more than had done so previously, started trading bitcoin, particularly on the buy side of transactions. This accounts for the increase in volume. This also means that demand for the coins rose. And basic economics tells us that if the demand for a good or service, in this case a digital currency, rises, then the price will rise to meet demand. Hence as more people started to buy bitcoin in 2017 (more than previous years, that is), the volume of transactions rose, and the price rose with it naturally, making it considerably higher than the S&P index price. The S&P index has remained fairly steady relative to bitcoin, with a visible positive increase since 2013. The gaps in the S&P red line is again the weekends and holiays during which the stock market is closed.
+
+```{r}
+#Bitcoin closingprice
+closePrice.difference = whole[,"Close"] - whole[,"GSPC.Close"]
+plot(closePrice.difference)
+```
+
+For a clearer picture of the price difference between the two assets, as discussed in the class, we look at the plotted difference. Up until Mid 2017, the S&P was price higher than bitcoin, and by about the same amount throughout. A notable exception is late 2013 when the price of bitcoin rose and the S&P price was not greatly higher than that of bitcoin. You can see the price difference reduce in late 2013 on the plot. Then in Mid 2017, the price difference reversed as it turned positive, which means that the price of bitcoin exceeded that of the S&P. The gaps also show up in this plot indicating the weekends and holidays during which the stock market was closed.
+
+
+### Analysis of Variance Over Time
+
+```{r}
+spy <- read.csv(file="SPY.csv")
+btc <- read.csv(file="btc.csv")
+
+btc$Date <-as.Date(btc$Date, format="%d-%b-%y")
+spy$Date <- as.Date(spy$date,format="%m/%d/%Y")
+spy <- arrange(spy, -row_number())
+
+index<-match('4/29/2013', spy$date)
+spy <- spy[index:nrow(spy),]
+
+spy$open <- as.numeric(spy$open)
+spy$close <- as.numeric(spy$close)
+spy$daily_pct_change <- spy$open/lag(spy$open) - 1
+```
+
+
+```{r}
+
+spy$Month <- months(spy$Date)
+spy$Year <- format(spy$Date,format="%y")
+
+spy$Month[spy$Month=='January'] <- 01
+spy$Month[spy$Month=='February'] <- 02
+spy$Month[spy$Month=='March'] <- 03
+spy$Month[spy$Month=='April'] <- 04
+spy$Month[spy$Month=='May'] <- 05
+spy$Month[spy$Month=='June'] <- 06
+spy$Month[spy$Month=='July'] <- 07
+spy$Month[spy$Month=='August'] <- 08
+spy$Month[spy$Month=='September'] <- 09
+spy$Month[spy$Month=='October'] <- 10
+spy$Month[spy$Month=='November'] <- 11
+spy$Month[spy$Month=='December'] <- 12
+
+
+monthly_spy <- aggregate( daily_pct_change ~ Month + Year , spy , FUN = var )
+library(zoo)
+monthly_spy$date <- as.yearmon(paste(monthly_spy$Year, monthly_spy$Month), "%Y %m")
+
+monthly_spy_2 <- aggregate( daily_pct_change ~ Month, monthly_spy, FUN = mean)
+
+ggplot(monthly_spy, aes(date, daily_pct_change)) + geom_line() + ggtitle("Variance of Daily Percentage Change, Month by Month, of S&P") + labs(x='Year(2013-2018)', y='Variance')
+```
+
+Here we look at how the variance of "daily percentage change" has changed over the months for S&P. The y-axis lists the years and includes the months between them. We will note what this looks like and plot the same graph for bitcoin.
+
+```{r}
+
+btc <- arrange(btc, -row_number())
+
+btc$Open <- as.numeric(btc$Open)
+btc$Close <- as.numeric(btc$Close)
+btc$daily_pct_change <- btc$Open/lag(btc$Open) - 1
+#btc$abs_daily_pct_change <- abs(btc$daily_pct_change)
+
+```
+
+```{r}
+btc<-btc[!(btc$daily_pct_change > 10),]
+```
+
+In this step of proprocessing we remove all observations in which the daily percentage change was greater than 10. This accounts for fewer than 20 of the outlier observations which skews the scale of the graph.
+
+
+```{r}
+
+btc$Month <- months(btc$Date)
+btc$Year <- format(btc$Date,format="%y")
+
+btc$Month[btc$Month=='January'] <- 01
+btc$Month[btc$Month=='February'] <- 02
+btc$Month[btc$Month=='March'] <- 03
+btc$Month[btc$Month=='April'] <- 04
+btc$Month[btc$Month=='May'] <- 05
+btc$Month[btc$Month=='June'] <- 06
+btc$Month[btc$Month=='July'] <- 07
+btc$Month[btc$Month=='August'] <- 08
+btc$Month[btc$Month=='September'] <- 09
+btc$Month[btc$Month=='October'] <- 10
+btc$Month[btc$Month=='November'] <- 11
+btc$Month[btc$Month=='December'] <- 12
+
+monthly_btc <- aggregate( daily_pct_change ~ Month + Year , btc , FUN = var )
+library(zoo)
+monthly_btc$date <- as.yearmon(paste(monthly_btc$Year, monthly_btc$Month), "%Y %m")
+#monthly_btc
+
+monthly_btc_2 <- aggregate( daily_pct_change ~ Month, monthly_btc, FUN = mean)
+#monthly_btc_2
+
+#btc$Date <- as.Date(btc$Date, "%d-%s-%Y")
+
+
+ggplot(monthly_btc, aes(date, daily_pct_change)) + geom_line() + ggtitle("Variance of Daily Percentage Change, Monthy by Monty, of BTC") + labs(x='Year (2013-2018)', y='Variance')
+
+```
+
+Now we are looking at the variance of "daily percentage change" over the months from 2013 to 2018 for bitcoin. We see that there is a relatively smooth period between 2014 and 2017 as compared to the jagged highs of variance in the S&P index. It is interesting to note that when the S&P displays lower levels of variance than its extremes, it is still jagged and changing. But when bitcoin displays lower levels of variance, the plot is completely smooth relative to the rest of the plot. In bitcoin, these changes of variance come about when the price rises to a relatively high level in the period in which it is observed. The high variance in 2013 is due to the rise we saw above, in the graph of differences between price levels of the S&P and bitcoin.
+
+### Seasonality
+
+```{r}
+library(forecast)
+library(tidyquant)  # Loads tidyverse, tidyquant, financial pkgs, xts/zoo
+
+#get bitcoin data
+btc <- read.csv("btc.csv")
+btc$Date <- as.Date(btc$Date,format="%d-%b-%y")
+
+#convert bitcoin data to xts object
+btc[,2:7] <- apply(apply(btc[,2:7], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc.xts <- as.xts(btc[,2:7], order.by = btc$Date)
+
+#get stock data
+x <- getSymbols("^GSPC", src = "yahoo", from = min(btc$Date), to = max(btc$Date))
+```
+
+
+```{r}
+#convert bitcoin data to xts object
+btc[,2:7] <- apply(apply(btc[,2:7], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc.xts <- as.xts(btc[,2:7], order.by = btc$Date)
+
+snp_daily_return <- tail(diff(log(GSPC$GSPC.Adjusted), lag=1),-1) #dailyReturn(Ad(GSPC))
+btc_daily_return <- tail(diff(log(btc.xts$Close), lag=1),-1)
+
+b <-data.frame(date=index(btc_daily_return), return=coredata(btc_daily_return)[,1], type='Bitcoin')
+s <-data.frame(date=index(snp_daily_return), return=coredata(snp_daily_return)[,1], type='S&P 500')
+d <- na.omit(rbind(b,s))
+
+grp_week <- d %>% group_by(type,week = wday(date, label=TRUE)) %>% summarise(avg_return = mean(return))
+ggplot(grp_week)+ geom_bar(aes(x=week,y=avg_return),stat="identity")+ facet_wrap(~type,nrow=1)+ ylab("Average Returns")
+
+```
+
+Now we are interested in the seasonal behavior of the two assets, in all sorts. First we look at daily patterns across weeks. The above two plots look at the value of the percentage log returns of each day of the week from the day before, and that shows on the y-axis. The x-axis shows the day of the week on which the daily percentage change is recorded. As weobserved during data analysis, bitcoin includes 7 days since its market is always open, even on holidays, as it is operated in a decentralized manner. However, the stock market graph includes 5 days since it is only open on weekdays. These graphs are not easy to read as they are on different scales, so we will let the scales be free and plot the corresponding days on top of one another. However, before we do that, we notice that the daily percentage returns of the stock market are dwarfed by bitcoin. This is the reason why the scales are so "off." Now we will change the scales.
+
+```{r}
+grp_week <- d %>% group_by(type,week = wday(date, label=TRUE)) %>% summarise(avg_return = mean(return))
+ggplot(grp_week)+ geom_bar(aes(x=week,y=avg_return),stat="identity")+ facet_wrap(~type,ncol=1, scales='free_y')+ylab("Average Returns")
+```
+
+This is the same set of graphs as above except the scale for S&P was reduced in order for the pattern among the bars to be shown.  The bar patterns between the two assets do not seem to match, in fact they seem to be reversed of each other. As the week progresses starting from Monday, bitcoin's daily returns seems to steadily decrease. At the same time, the S&P index seems to steadily increase. What this means with respect to the time frame of the week is left to the reader to decide. One thought is that the "traditional" market of the S&P has more investor enthusiasm when most people are entering the "traditional" setting of the M-F 9-5 work schedule, while thoughts about "alternative" markets such as bitcoin are forgotten. Note that this is only a hypothesis. This pattern - bitcoin returns dropping and S&P returns rising - continues until Wednesday. After that the pattern discontinues. On Friday, we see an increase in the returns of the stock market. This is attributable to people leaving work or their institutions with a purchase of stocks to end the week. For bitcoin, Friday shows a relatively low return. Bitcoin's highest returns are on Monday and Saturday. 
+
+```{r}
+grp_mon <- d %>% group_by(type,mon = month(date,label=TRUE)) %>% summarise(avg_return = mean(return))
+ggplot(grp_mon)+ geom_bar(aes(x=mon,y=avg_return),stat="identity")+ facet_wrap(~type,ncol=1,scales='free')+ ylab("Average Returns")+xlab("")
+```
+
+Now for seasonality, we look at monthly behavior across years. Each month in the x-axis shows the returns of the month from the previous month. The bitcoin returns are much higher than those of the S&P, so we let the scales be free in order to see patterns in the bar graphs. Unlike in the weeks, we now see some matching patterns. January is negative, March is low, April is low, May is high, June is low, August is low, September is low, October is high, November is high, and December is low. The only months that are different are February and July. These patterns are quite interesting. It shows that even across the highs and lows of bitcoin, particularly the recent skyrocketing rise, the two assets show some long-term correlation and investors are buying and selling them together, to an extent. More on correlation will come later.
+
+Similarly, we analyse patterns in bitcoin and stock market volume monthly and weekly. 
+
+```{r}
+#convert bitcoin data to xts object
+btc[,2:7] <- apply(apply(btc[,2:7], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc.xts <- as.xts(btc[,2:7], order.by = btc$Date)
+
+snp_daily_volume <- GSPC$GSPC.Volume
+btc_daily_volume <- btc.xts$Volume
+
+b <-data.frame(date=index(btc_daily_volume), volume=coredata(btc_daily_volume)[,1], type='Bitcoin')
+s <-data.frame(date=index(snp_daily_volume), volume=coredata(snp_daily_volume)[,1], type='S&P 500')
+d <- na.omit(rbind(b,s))
+
+
+grp_week <- d %>% group_by(type,week = wday(date, label=TRUE)) %>% summarise(avg_volume = mean(volume))
+ggplot(grp_week)+ geom_bar(aes(x=week,y=avg_volume),stat="identity")+ facet_wrap(~type,ncol=1)+ylab("Average Volume")
+
+grp_mon <- d %>% group_by(type,mon = month(date, label=TRUE)) %>% summarise(avg_volume = mean(volume))
+ggplot(grp_mon)+ geom_bar(aes(x=mon,y=avg_volume),stat="identity")+ facet_wrap(~type,ncol=1)+ylab("Average Volume")
+```
+
+The volume of S&P is more or less uniform acroos all months. Not the case with Bitcoin. But is it one year thats an outlier? Let's facet by year and see. No weekly patetrns were observed.
+
+```{r}
+d$year = year(d$date)
+btc_d <- d[d$type == 'Bitcoin',] 
+grp_mon <- btc_d[btc_d$year != 2013,] %>% group_by(mon = month(date, label=TRUE), year) %>% summarise(avg_volume = mean(volume))
+ggplot(grp_mon)+ geom_bar(aes(x=mon,y=avg_volume),stat="identity") + facet_wrap(~year,ncol=1)+ylab("Average Volume")
+
+ggplot(grp_mon)+ geom_bar(aes(x=mon,y=avg_volume),stat="identity") + facet_wrap(~year,ncol=1,scales="free_y")+ylab("Average Volume")
+```
+
+No, the pattern is not consistent across months. It is only because of high volume in the beginning of 2018 and end of 2017.
+
+### Are the assets correlated?
+
+Now, we look at how bitcoin returns are correlated with the traditional stock market. We are interested in this because, bitcoins can be a great for portfolio diversification if they are not related to the stock market.
+
+Since correlation can greatly vary with the time frame, we look at rolling correlations over a 90 day period. For these calculations, we omit weekends and other holidays for which S&P 500 data was missing. Using xts objects made it easier to calculate lagged differences and running correlations as all operations are aligned by time.
+
+
+```{r}
+library(tidyquant)  # Loads tidyverse, tidyquant, financial pkgs, xts/zoo
+library(corrr)      # Tidy correlation tables and correlation plotting
+library(TTR)
+
+#get bitcoin data
+btc <- read.csv("btc.csv")
+btc$Date <- as.Date(btc$Date,format="%d-%b-%y")
+
+#convert bitcoin data to xts object
+btc[,2:5] <- apply(apply(btc[,2:5], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc <- as.xts(btc[,2:5], order.by = btc$Date)
+
+#Remove weekends from xts data
+index<-which(.indexwday(btc)==0|.indexwday(btc)==6) 
+btc_new <- btc[-index]
+
+snp_daily_return <- tail(diff(log(GSPC$GSPC.Adjusted), lag=1),-1) #dailyReturn(Ad(GSPC))
+btc_daily_return <- tail(diff(log(btc_new$Close), lag=1),-1)
+
+# get rolling correlations
+a <- merge(snp_daily_return,btc_daily_return, join = "inner")
+rolling_corr <- runCor(a[,1],a[,2],90) #rollapplyr(a, 30, function(x) cor(a[,1],a[,2]), by.column=TRUE)
+
+names(rolling_corr) <- "value"
+
+static_corr = cor(a[,1],a[,2])
+
+ggplot(rolling_corr, aes(x = Index, y = value)) +geom_line()+geom_line(aes(y = static_corr[1,1]), color = "red")+scale_color_tq() + labs(title = "90-Day Rolling Correlations, Bitcoin vs S&P500",
+            subtitle = "Relationships are dynamic vs static correlation (red line)",
+             x = "Time", y = "Correlation")+theme_tq()+theme(legend.position="none")
+
+#max(na.omit(rolling_corr))
+#[1] 0.3601306
+```
+
+Indeed, the correlation is very small as shown. The correlations over the time span is plotted by the black line. The average correlation over the entire period is plotted by the red line. It shows that the correlation between the assets is close to 0. However, starting in Mid 2017 a steady uptrend can be observed with correlation reaching a maximum of 0.36. Does this suggest that bitcoin market is becoming increasingly related to stock market movement as it matures? Could be because traditional investors are increasingly investing in bitcoin market? Both are likely, however only time will tell if this trend continues.
+
+
+
+### Investment Returns
+
+Now we are interested in the question of investments and returns in Bitcoin as well as
+the stock market (as indexed and tracked by the S&P Index). We know that bitcoin is more
+volatile than the stock market, but what about its returns for an investor? We look at
+simple investment strategies and plot their returns using a histogram. First we ask, if
+one buys $100 of the asset, what is their return after 30 days? What does that data look
+like?
+
+
+
+```{r}
+
+spy <- read.csv(file="SPY.csv")
+btc <- read.csv(file="btc.csv")
+
+btc$Date <-as.Date(btc$Date, format="%d-%b-%y")
+spy$Date <- as.Date(spy$date,format="%m/%d/%Y")
+```
+
+```{r}
+spy <- arrange(spy, -row_number())
+```
+
+```{r}
+
+index<-match('4/29/2013', spy$date)
+spy <- spy[index:nrow(spy),]
+
+```
+
+```{r}
+returns <- c()
+
+for (i in 1:nrow(btc)) {
+  r <- spy[i+22, 2]*100/spy[i, 2]
+  rr <- r - 100
+  returns <- c(returns, rr)
+}
+
+returns <-as.data.frame(returns)
+returns <- na.omit(returns)
+
+library(ggplot2)
+
+ggplot(returns, aes(returns)) + geom_histogram(binwidth=1,
+                                               fill= '#56b4e9', col = '#e69f00',
+                                               alpha=0.6) + ggtitle("30 Day (22 trading) $100 Investment Returns for S&P") + labs(x='Returns', y='Frequency')
+```
+
+We now look the returns of investing in the stock market, or the S&P index. This histogram shows the distribution of returns under the following conditions: the investor invests \$100 into the index and checks his returns 30 days in the future, which is equivalent to 22 trading days since weekends not included in the stock market. Then as you expet from a 30 day investment of $100, the returns are in the range of -10 to 10.
+
+Facts:
+There were **1223** trading events looked at for this trading strategy. Essentially, every day since 2013 when our data analysis begins is counted as a buy day, and 30 days later than that is the sell day.
+The expected return (mean) of this investment strategy comes out to **$0.94**.
+
+As expected in the stock market, the returns are approximately normally distributed. One expects this from the stock market which has been active for centuries. If the returns looked differently or skewed to one side, investment would capitalize on it and would change the distribution until the returns come out to be a normal distribution. The mean of \$0.94 may seem small, but remember this is only a 30 day time period, with \$100 invested. And the mean is positive because in the years covered by our dataset, 2013 to 2018, there existed a general bull market.
+
+
+```{r}
+btc <- arrange(btc, -row_number())
+btc$Close <- as.numeric(btc$Close)
+```
+
+```{r}
+
+returns <- c()
+
+for (i in 1:nrow(btc)) {
+  r <- btc[i+30, 5]*100/btc[i, 5]
+  rr <- r - 100
+  returns <- c(returns, rr)
+}
+
+returns <-as.data.frame(returns)
+returns <- na.omit(returns)
+
+
+returns <- returns[returns<1000]
+returns <-as.data.frame(returns)
+
+
+
+library(ggplot2)
+
+ggplot(returns, aes(returns)) + geom_histogram(bins=100,
+                                               fill= '#56b4e9', col = '#e69f00',
+                                               alpha=0.6) + ggtitle("30 Day $100 Investment Returns for BTC") + labs(x='Returns', y='Frequency')
+
+
+```
+
+Now we look at the same investment strategy applied to the bitcoin market and analyze the returns yielded. That is, we consider an investor investing \$100 in bitcoin on a given day, and selling his investment for a profit or a loss 30 days later, and we look at this return. The first aspect of this graph to notice is that the range, particularly the x-scale, is much larger than the same for the S&P. In fact, the x-scale would be bigger but we limited the outliers and limited the returns to 1000 for convenience of graphing. The largest return observed here was \$156,300!
+
+Facts:
+There were **1739** trading events in this analysis. This is a significantly larger number than the same for the S&P, and this is because bitcoin markets are not closed in the weekends.
+The expected return (mean) in this investment strategy is a whopping **\$30.82**.
+
+The expected return is astonishingly higher than that of the S&P. This is on account of the general increase in bitcoin investments and investor sentiment between 2013 and 2018. There are many extreme values in the data. We can observe that the distribution is right skewed. Additionally, we may observe that the distribution is fat-tailed. High returns on the far right of this graph may account for much of the variance observed. Notwithstanding the outliers, the distribution looks similar to a normal distribution. Let's take a closer look.
+
+
+```{r}
+
+returns <- c()
+
+for (i in 1:nrow(btc)) {
+  r <- btc[i+30, 5]*100/btc[i, 5]
+  rr <- r - 100
+  returns <- c(returns, rr)
+  
+  
+}
+
+returns <-as.data.frame(returns)
+returns <- na.omit(returns)
+
+
+returns <- returns[returns<200]
+returns <-as.data.frame(returns)
+
+library(ggplot2)
+
+ggplot(returns, aes(returns)) + geom_histogram(bins=100,
+                                               fill= '#56b4e9', col = '#e69f00',
+                                               alpha=0.6) + ggtitle("30 Day $100 Investment Returns for BTC") + labs(x='Returns', y='Frequency')
+
+
+```
+
+We restrict returns to be smaller than \$200 and we see a close-up of the above graph. In this subset of the data (which has 1635 trading events), the expected return is decreased from above to \$2.29. We see that the distribution looks like defective sort of normal distribution with some asymmetries, but it is still said to be recognizable as a normal distribution. Another considerable observation is that there were many several instances of losses close to \$100, which means that the investor would lose his original \$100 plus another \$100. Bad deal!
+
+
+
+```{r}
+
+btc$daily_pct_change <- btc$Close/lag(btc$Close) - 1
+
+
+avg_rate <- c()
+
+for (i in 2:nrow(btc)) {
+  i <- i
+  r <- (btc[i, 8] + btc[i+1, 8] + btc[i+2, 8] + btc[i+3, 8] + btc[i+4, 8] + btc[i+5, 8] + btc[i+6, 8])/8
+  avg_rate <- c(avg_rate, r)
+  
+  
+}
+
+avg_rate <- avg_rate[!(is.na(avg_rate))]
+
+avg_rate <- c(c(0, 0, 0, 0, 0, 0, 0), avg_rate)
+#avg_rate <- c(c(0, 0, 0), avg_rate)
+
+
+btc$avg_rate <- avg_rate
+
+marker <- ((btc$avg_rate > 0.05))
+btc$marker <- marker
+length(which(btc$marker))
+
+```
+
+
+```{r}
+
+returns <- c()
+
+for (i in 1:nrow(btc)) {
+  if (btc[i, 10] == TRUE){
+    r <- btc[i+30, 5]*100/btc[i, 5]
+    rr <- r - 100
+    returns <- c(returns, rr)
+  }
+  
+  
+}
+
+returns <-as.data.frame(returns)
+returns <- na.omit(returns)
+
+returns <- returns[returns<1000]
+returns <-as.data.frame(returns)
+
+library(ggplot2)
+
+ggplot(returns, aes(returns)) + geom_histogram(binwidth=15,
+                                               fill= '#56b4e9', col = '#e69f00',
+                                               alpha=0.6) + ggtitle("30 Day $100 Investment Returns for BTC in an Uptrend") + labs(x='Returns', y='Frequency')
+
+
+```
+
+For this analysis, we apply a different investment strategy to the same bitcoin market. We only make the \$100 investment if we observe an uptrend in the market, with uptrend defined as follows: the daily percentage change in price averaged over a week is greater than 5%. The 5% quantity was selected to 1.) be a sensible qualification of an uptrend and 2.) restrict us to look at about 10% of all trading events. Therefore there were 155 trading events observed in this analysis. Again, \$100 is invested when an uptrend is detected and the investment is sold for a return after 30 days. As you can see, the distribution looks completely different. Firstly, any resemblance of a normal distribution is virtually wiped out. There are many returns around the 0 range, and many interspersed, perhaps diminishing, as one ventures into the higher return territory. The negative returns still exist; however, they do not have as strong an effect as in the previous analysis.
+
+Fact:
+The expected return of this investment strategy in bitcoin is **\$58.76**.
+
+This return is almost double that of the regular investment strategy case, where we are not buying in an uptrend. The important observation here is that bitcoin is "trendy," that is, if an upward trend exists, it is likely to continue. Let's now look at the same uptrend strategy applied to the S&P.
+
+
+
+```{r}
+
+spy$daily_pct_change <- spy$close/lag(spy$close) - 1
+
+avg_rate <- c()
+
+for (i in 2:nrow(spy)) {
+  i <- i
+  r <- (spy[i, 8] + spy[i+1, 8] + spy[i+2, 8] + spy[+3, 8] + spy[i+4, 8] + spy[i+5, 8] + spy[i+6, 8])/8
+  avg_rate <- c(avg_rate, r)
+  
+  
+}
+
+avg_rate <- avg_rate[!(is.na(avg_rate))]
+
+avg_rate <- c(c(0, 0, 0, 0, 0, 0, 0), avg_rate)
+#avg_rate <- c(c(0, 0, 0), avg_rate)
+
+
+spy$avg_rate <- avg_rate
+
+marker <- ((spy$avg_rate > 0.0015))
+spy$marker <- marker
+length(which(spy$marker))
+
+```
+
+
+```{r}
+
+returns <- c()
+
+for (i in 1:nrow(spy)) {
+  if (spy[i, 10] == TRUE){
+    r <- spy[i+30, 2]*100/spy[i, 2]
+    rr <- r - 100
+    returns <- c(returns, rr)
+  }
+  
+  
+}
+
+returns <-as.data.frame(returns)
+returns <- na.omit(returns)
+
+
+print ("Trading events")
+print (nrow(returns))
+print ("Average return")
+print (lapply(returns, mean))
+
+library(ggplot2)
+
+ggplot(returns, aes(returns)) + geom_histogram(binwidth=1,
+                                               fill= '#56b4e9', col = '#e69f00',
+                                               alpha=0.6) + ggtitle("30 Day $100 Investment Returns for S&P in an Uptrend") + labs(x='Returns', y='Frequency')
+
+
+```
+
+This histogram examines the returns of the "Uptrend strategy" applied to the S&P. We invest \$100 if the daily percentage change in price over a week is on average greater than a certain percentage (chosen to include the roughly 10% of periods with biggest trends), and then we sell our holdings 30 days after buying. There were 140 trading events in this analysis. As in the bitcoin histogram, the normal distribution has disappeared. One may notice that high returns of close to \$10 have gone, while low returns of -\$10 remain. Things look bleaker. Indeed, the expected return of this investment strategy is **$0.91**, as compared to $0.94 in the non-uptrend general strategy. Why is this? Well, short term trends in the stock market are often not strong forecasting indicators. The market's trends are immune to simple investment strategies such as this one, where we are buying after a week of uptrend and selling later. As a result, unlike bitcoin, the histogram for the S&P in this case has shifted to something less desirable. It is better to invest in the stock market on a less intelligent strategy: buy and sell 30 days later.
+
+
+## Executive Summary (Presentation-style)
+
+Provide a short nontechnical summary of the most revealing findings of your analysis  written for a nontechnical audience. The length should be approximately two pages (if we were using pages...) Take extra care to clean up your graphs, ensuring that best practices for presentation are followed.
+
+We have analyzed the bitcoin asset market within the more general cryptocurrency space, and here we give a relatively nontechnical summary of our findings as a report.
+
+The important, relevant, and refined graphs are referenced with a **(#)** and appear below the summary.
+
+First we define cryptocurrencies. A cryptocurrency is a digital asset, the same way gold or the US dollar is an asset. It does not have a physical substance, but a record of all existing bitcoins as well as transactions of bitcoins is stored on a blockchain, or a ledger which is viewable by anyone. Users may use identification numbers to identify their accounts and transact bitcoins with other users. The blockchain ledger, rather than being owned and managed and verified by a central entity or institution, is decentralized. The transactions of bitcoin on the blockchain are securely regulated and verified by cryptographic techniques. When one user sends bitcoin to another user, cryptographic facts ensure that the end user receives the funds and the transaction is recorded on the common ledger. In short, a cryptocurrency is a decentralized digital asset which is securely operated and regulated with a common ledger called a blockchain and cryptography-based verification rules.
+
+First we find cryptocurrency market is imbalanced toward the particular currency of bitcoin. We look at the market capitalization of all cryptocurrencies, which is defined as the total value, in US Dollars, of all assets, or coins, existing in a cryptocurrency blockhain. If we look at this measurement, bitcoin is valued at over \$150 billion. The next closest contender for first place is the ethereum coin, called ether, on the ethereum blockchain, valued at \$59 billion, roughly a third the valuation of bitcoin. The list of remaining smaller cryptocurrencies is marvelously long. There are many smaller market cap cryptocurrencies in circulation, some of which can be viewed in our tree map. If you also look at the tree map, you will find that the bitcoin market cap exceeds the market cap of other cryptocurrencies such as to be the number one cryptocurrency. In fact, the combination of market caps of the next 10 largest cryptocurrencies is still less than that of bitcoin. Correspondingly, bitcoin is the top cryptocurrency discussed in the news and among crypto investors and laypeople around the world.
+
+```{r, echo=FALSE}
+library(coinmarketcapr)
+library(treemap)
+
+market_today <- get_marketcap_ticker_all()
+
+# The palette with grey:
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+df1 <- na.omit(market_today[,c('id','market_cap_usd')])
+df1$market_cap_usd <- as.numeric(df1$market_cap_usd)
+df1$formatted_market_cap <-  paste0(df1$id,'\n','$',format(df1$market_cap_usd,big.mark = ',',scientific = F, trim = T))
+treemap(df1, index = 'formatted_market_cap', vSize = 'market_cap_usd', title = 'Cryptocurrency Market Cap', fontsize.labels=c(12, 8), palette="GnBu")
+```
+
+
+We restrict the rest of our analysis to bitcoin, and bitcoin compared to the US stock market. All our findings will take place over the time period between 2013 and present day 2018. Perhaps the main finding over this period, and the most prominent feature observed and explained, is the rise of bitcoin's price, which has happened in the past year in particular. This defines the 2013-2018 period.
+
+Since 2013, the price of bitcoin has been steadily rising. This is due to cryptocurrencies and blockchains becoming more popular as time goes on and familiarity increases. In 2013 the price of bitcoin was near \$100. By October 2017 the price had climbed quite high to \$5,000. But until October 2017 the growth was different, was more controlled and had a smaller acceleration, than what would come after October 2017. At this point in bitcoin's price history, it rose from \$5,000 in October 2017 to a remarkable \$19,000 in mid December 2017. This sudden shift which occured in price reflects in the associated volume of bitcoins traded as well as the variance of bitcoin's price in that period of time. The volume of an asset refers to the number of such assets (bitcoins) either bought or sold in a particular time period. We find that the volume of bitcoin in late 2017, between October and December, or between July and December if you extend the starting price to \$2000, is a great quantity compared to other periods of time. It is so large as to define the graph of volume and its shape. Comparing this to the stock market, results are interesting. The US stock market is tracked by the price of the S&P index, which is a public index that tracks a selection of 500 representative stocks in the US stock market. (It is one of the widely used indices in US finance.) While bitcoin's price fluctuates greatly to a whopping \$19,000, the value of the S&P index remains at a relatively stable level. Our charts show that the index increases over the time period, but the level does not vary as greatly as it does in bitcoin. Similarly, the volume of assets traded in the S&P remains stable and at a grounded level while the volume of bitcoin skyrockets.
+
+Following this momentous rise in bitcoin in late 2017, it proceeded to have a considerable and large decline. The decline ended at a price of \$7,000 in February 2018. Eventually this loss of investor interest correlated with a loss of volume. The graph of bitcoin volume shows a decline in 2018. This decline as well as the rise account for the biggest features visible in both the price and volume charts of bitcoin. As this is happening, the S&P index remains very stable in both price and volume, through more so in price.
+
+```{r, message=F, warning=F, echo=FALSE}
+
+Bitcoin <- getCoins("BTC")
+Bitcoin$year <- substring(Bitcoin$date,1,4)
+bitcoin_events <- Bitcoin[Bitcoin$year == "2017" | Bitcoin$year == "2018", ]
+plot(bitcoin_events$date,bitcoin_events$close, type = "l",ylab = "Bitcoin Close price" , xlab = "Jan 2017-April 2018", main = "Recent Bitcoin price trends")
+abline(v=as.Date("2017-11-12"),col = "black",lty=2)
+pt1 <- bitcoin_events[bitcoin_events$date == "2017-11-12","close"]
+dt1 <- as.Date("2017-11-12")
+abline(v=as.Date("2017-12-16"),col = "black",lty=2)
+pt2 <- bitcoin_events[bitcoin_events$date == "2017-12-16","close"]
+dt2 <- as.Date("2017-12-16")
+abline(v=as.Date("2018-02-06"),col = "black",lty=2)
+pt3 <- bitcoin_events[bitcoin_events$date == "2018-02-06","close"] 
+dt3 <- as.Date("2018-02-06")
+x1 <- c(as.Date("2017-11-12"),as.Date("2017-12-16"))
+y1 <- c(pt1,pt2)
+x2 <- c(as.Date("2017-12-16"),as.Date("2018-02-06"))
+y2 <- c(pt2,pt3)
+lines(x1,y1,col="#E69F00",lwd = 2)
+lines(x2,y2,col="#56B4E9",lwd = 2)
+text(x1[1],y1[1],y1[1],pos = 1,cex=0.5)
+text(x1[2],y1[2],y1[2],pos = 4,cex=0.5)
+text(x2[2],y2[2],y2[2],pos = 1,cex=0.5)
+legend(as.Date("2017-01-01"),15000, legend=c("Bitcoin price increases by 300%", "Steepest fall in history"),col=c("#E69F00","#56B4E9"), lty=1:2, cex=0.8)
+axis(side=3, at=as.Date("2017-11-12"), labels="12 Nov",cex.axis = 0.7)
+axis(side=3, at=as.Date("2017-12-16"), labels="16 Dec",cex.axis = 0.7)
+axis(side=3, at=as.Date("2018-02-06"), labels="02 Feb",cex.axis = 0.7)
+```
+
+
+We find that the reason for the major changes in bitcoin's price in 2017/2018 are two-fold. First, at the end 2017 about the time of the sudden rise in price, Segwit2x was exxecuted, which is a fork in the bitcoin blockchain, which created bitcoin cash, under new protocol settings. This emergent technology sparked new interest in the cryptocurrency space and naturally the biggest participant - bitcoin. When interest accumulates in bitcoin, the rise in price builds on itself and is no longer dependent on anyone or anything. The fall in price, occurring afterward, was due to 1.) the country of China imposing restrictions on the activity of users in cryptocurrencies, and 2.) presumably, fears of a bubble having developed in the prior rise in price.
+
+We have also analyzed variance over our period of 2013 to 2018. In expected fashion, the plot of variance for bitcoin is consumed by the high variance occuring in late 2017 with the rise in price, or, if you like, the bubble. It is important to note that this analysis of variance was reassured in the following sense: instead of looking at the variance of the absolute price, which would be biased toward changes in price among the higher ranges of price, we look at the variance of daily percentage changes in price. This controls for differences in ranges. Despite this control, we find that an unprecedented change in variance of daily changes occurred at the end of 2017 in the bitcoin market. This finding means that such changes in the bitcoin price have not been seen other than in the month sof October, November, and December 2017. Over the same period of 2013 to 2018, we find for the S&P index that the variance of price has been fluctuating significantly, making for a more interesting graph than the steady and stable increase of price for the S&P. We find that the years of 2013-2016 was a period containing months of exceptional variance. What this means is that the percentage change in price between subsequent days in these high months, were far from uniform or stable. One day could have had a percentage change of 0.3% from the previous, and another day had a change of -0.25% from the previous day -- they are not at all similar. Then from the years of 2016-2018 the variance of the S&P was "quiet", in the sense that variance of price changes was low, and one could expect that changes from day to day are uniform. Note, this is independent of the change in price. The price increases for the S&P over all years. The variance tells us how bumpy the road is as it climbs.
+
+**(3)**
+```{r, echo=FALSE}
+spy <- read.csv(file="SPY.csv")
+btc <- read.csv(file="btc.csv")
+
+btc$Date <-as.Date(btc$Date, format="%d-%b-%y")
+spy$Date <- as.Date(spy$date,format="%m/%d/%Y")
+spy <- arrange(spy, -row_number())
+
+index<-match('4/29/2013', spy$date)
+spy <- spy[index:nrow(spy),]
+
+spy$open <- as.numeric(spy$open)
+spy$close <- as.numeric(spy$close)
+spy$daily_pct_change <- spy$open/lag(spy$open) - 1
+```
+
+
+```{r, echo=FALSE}
+
+spy$Month <- months(spy$Date)
+spy$Year <- format(spy$Date,format="%y")
+
+spy$Month[spy$Month=='January'] <- 01
+spy$Month[spy$Month=='February'] <- 02
+spy$Month[spy$Month=='March'] <- 03
+spy$Month[spy$Month=='April'] <- 04
+spy$Month[spy$Month=='May'] <- 05
+spy$Month[spy$Month=='June'] <- 06
+spy$Month[spy$Month=='July'] <- 07
+spy$Month[spy$Month=='August'] <- 08
+spy$Month[spy$Month=='September'] <- 09
+spy$Month[spy$Month=='October'] <- 10
+spy$Month[spy$Month=='November'] <- 11
+spy$Month[spy$Month=='December'] <- 12
+
+
+monthly_spy <- aggregate( daily_pct_change ~ Month + Year , spy , FUN = var )
+library(zoo)
+monthly_spy$date <- as.yearmon(paste(monthly_spy$Year, monthly_spy$Month), "%Y %m")
+
+monthly_spy_2 <- aggregate( daily_pct_change ~ Month, monthly_spy, FUN = mean)
+
+ggplot(monthly_spy, aes(date, daily_pct_change)) + geom_line(col= '#e69f00') + ggtitle("Variance of Daily Percentage Change, Month by Month, of S&P") + labs(x='Year', y='Variance')
+```
+
+```{r, echo=FALSE}
+
+btc <- arrange(btc, -row_number())
+
+btc$Open <- as.numeric(btc$Open)
+btc$Close <- as.numeric(btc$Close)
+btc$daily_pct_change <- btc$Open/lag(btc$Open) - 1
+#btc$abs_daily_pct_change <- abs(btc$daily_pct_change)
+
+```
+
+```{r, echo=FALSE}
+btc<-btc[!(btc$daily_pct_change > 10),]
+```
+
+
+```{r, echo=FALSE}
+
+btc$Month <- months(btc$Date)
+btc$Year <- format(btc$Date,format="%y")
+
+btc$Month[btc$Month=='January'] <- 01
+btc$Month[btc$Month=='February'] <- 02
+btc$Month[btc$Month=='March'] <- 03
+btc$Month[btc$Month=='April'] <- 04
+btc$Month[btc$Month=='May'] <- 05
+btc$Month[btc$Month=='June'] <- 06
+btc$Month[btc$Month=='July'] <- 07
+btc$Month[btc$Month=='August'] <- 08
+btc$Month[btc$Month=='September'] <- 09
+btc$Month[btc$Month=='October'] <- 10
+btc$Month[btc$Month=='November'] <- 11
+btc$Month[btc$Month=='December'] <- 12
+
+monthly_btc <- aggregate( daily_pct_change ~ Month + Year , btc , FUN = var )
+library(zoo)
+monthly_btc$date <- as.yearmon(paste(monthly_btc$Year, monthly_btc$Month), "%Y %m")
+#monthly_btc
+
+monthly_btc_2 <- aggregate( daily_pct_change ~ Month, monthly_btc, FUN = mean)
+#monthly_btc_2
+
+#btc$Date <- as.Date(btc$Date, "%d-%s-%Y")
+
+
+ggplot(monthly_btc, aes(date, daily_pct_change)) + geom_line(col= '#e69f00') + ggtitle("Variance of Daily Percentage Change, Monthy by Monty, of BTC") + labs(x='Year', y='Variance')
+
+```
+
+
+Our next important analysis centered our seasonality. That is, were there seasonal behaviors, on level of weeks or months, that correlated between the bitcoin and stock market? We plotted patterns of price changes between days averaged over each day of the week, and we found notable and interesting patterns. The weekly plots are different between the bitcoit market and the S&P index, because the bitcoin market is open every day while the stock market is open only on weekdays. Still, we make inferences by looking at weekdays for bitcoin and the S&P. Our finding was that as the week moved from Monday to mid-week, the S&P generally had positive price changes, while bitcoin had a trend of negative price changes. Our hypothesis is that the week, with the 9-5 workday, is associated with traditional institutions which are associated with traditional money systems. Hence the stock market goes up as the week starts and bitcoin goes down, bitcoin being an alternative market, and an alternative to institutions. This is only a hypothesis, however the pattern is clear enough. After mid-week and towards the end of the week, there are no discernible patterns found. We note the finding that the highest percentage changes day for bitcoin are Monday (coming from Sunday) and Saturday.
+
+**(4)**
+```{r, echo=FALSE}
+library(forecast)
+library(tidyquant)  # Loads tidyverse, tidyquant, financial pkgs, xts/zoo
+
+#get bitcoin data
+btc <- read.csv("btc.csv")
+btc$Date <- as.Date(btc$Date,format="%d-%b-%y")
+
+#convert bitcoin data to xts object
+btc[,2:7] <- apply(apply(btc[,2:7], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc.xts <- as.xts(btc[,2:7], order.by = btc$Date)
+
+#get stock data
+x <- getSymbols("^GSPC", src = "yahoo", from = min(btc$Date), to = max(btc$Date))
+```
+
+
+```{r, echo=FALSE}
+#convert bitcoin data to xts object
+btc[,2:7] <- apply(apply(btc[,2:7], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc.xts <- as.xts(btc[,2:7], order.by = btc$Date)
+
+snp_daily_return <- tail(diff(log(GSPC$GSPC.Adjusted), lag=1),-1) #dailyReturn(Ad(GSPC))
+btc_daily_return <- tail(diff(log(btc.xts$Close), lag=1),-1)
+
+b <-data.frame(date=index(btc_daily_return), return=coredata(btc_daily_return)[,1], type='Bitcoin')
+s <-data.frame(date=index(snp_daily_return), return=coredata(snp_daily_return)[,1], type='S&P 500')
+d <- na.omit(rbind(b,s))
+
+```
+
+
+```{r, echo=FALSE}
+grp_week <- d %>% group_by(type,week = wday(date, label=TRUE)) %>% summarise(avg_return = mean(return))
+ggplot(grp_week)+ geom_bar(aes(x=week,y=avg_return),stat="identity",fill= '#56b4e9', col = '#e69f00')+ facet_wrap(~type,ncol=1, scales='free_y')+ylab("Average Returns") #+scale_fill_manual("blue")#" ##E69F00", "#56B4E9"
+
+
+```
+
+
+We also find interesting patterns in seasonal analysis of months. We plot the average returns of each month from the previous month. Our results here are astounding. We find that bitcoin and the stock market's monthly behaviors are virtually exactly the same. In 10 of the 12 months, high returns in the stock market correspond to high returns in the bitcoin market, and low returns in the stock market correspond to low returns in the bitcoin market. Again, this is despite the unorthodox floating rise in the late months of 2017, which are sure to affect the bitcoin seasonality. This fact does not imply correlation between the assets; it only implies that month-by-month the assets follow a similar pattern. We know that relative to previous months, monthly returns are relatively in correspondence. However we do not know if the assets are correlated on the whole. This is our next investigation.
+
+```{r, echo=FALSE}
+grp_mon <- d %>% group_by(type,mon = month(date,label=TRUE)) %>% summarise(avg_return = mean(return))
+ggplot(grp_mon)+ geom_bar(aes(x=mon,y=avg_return),stat="identity",fill= '#56b4e9', col = '#e69f00')+ facet_wrap(~type,ncol=1,scales='free')+ ylab("Average Returns")+xlab("")
+```
+
+Our correlation analysis of the two assets yielded a finding that we expect. There is virtually no correlation between bitcoin and the stock market. This refutes the idea that bitcoin moves with the investor sentiment and activity of the stock market. It also refutes the idea that bitcoin is a hedge against the stock market. This would be the case in negative correlation, but the correlation is close to zero, and a little bit positive. Although a hedge against traditional financial markets is a narrative of bitcoin, the empirical evidence does not show behavior of a hedge. A notable point in time is early 2018, when the correlation between these assets rose high. This can be seen in the graphs of the assets bitcoin and the S&P index in recent times, in which the prices seem to follow one another. Besides this recent correlative behavior, we find no correlation.
+
+```{r, echo=FALSE}
+library(tidyquant)  # Loads tidyverse, tidyquant, financial pkgs, xts/zoo
+library(corrr)      # Tidy correlation tables and correlation plotting
+library(TTR)
+
+#get bitcoin data
+btc <- read.csv("btc.csv")
+btc$Date <- as.Date(btc$Date,format="%d-%b-%y")
+
+#get stock data
+#getSymbols("^GSPC", src = "yahoo", from = min(btc$Date), to = max(btc$Date))
+
+#convert bitcoin data to xts object
+btc[,2:5] <- apply(apply(btc[,2:5], 2, gsub, patt=",", replace=""), 2, as.numeric) 
+btc <- as.xts(btc[,2:5], order.by = btc$Date)
+
+#Remove weekends from xts data
+index<-which(.indexwday(btc)==0|.indexwday(btc)==6) 
+btc_new <- btc[-index]
+
+snp_daily_return <- tail(diff(log(GSPC$GSPC.Adjusted), lag=1),-1) #dailyReturn(Ad(GSPC))
+btc_daily_return <- tail(diff(log(btc_new$Close), lag=1),-1)
+
+# get rolling correlations
+a <- merge(snp_daily_return,btc_daily_return, join = "inner")
+rolling_corr <- runCor(a[,1],a[,2],90) #rollapplyr(a, 30, function(x) cor(a[,1],a[,2]), by.column=TRUE)
+
+names(rolling_corr) <- "value"
+
+static_corr = cor(a[,1],a[,2])
+
+ggplot(rolling_corr, aes(x = Index, y = value)) +geom_line(col= '#e69f00')+geom_line(aes(y = static_corr[1,1]), color = "#56b4e9")+scale_color_tq() + labs(title = "90-Day Rolling Correlations, Bitcoin vs S&P500",
+            subtitle = "Relationships are dynamic vs static correlation (red line)",
+             x = "Time", y = "Correlation")+theme_tq()+theme(legend.position="none")
+
+#max(na.omit(rolling_corr))
+#[1] 0.3601306 fill= '#56b4e9', col = '#e69f00'
+```
+
+
+We also find observations of particular interest to an investor. We look at two investment strategies: 1.) buy the asset ($100 of it) and sell it 30 days late at a gain or a loss, 2.) buy the asset in an uptrend in the corresponding market (an uptrend over a week's period, which are approximately 10% of the possible instances) and sell it 30 days later. One strategy is a general, simple, baseline strategy that aims to understand the behavior of the market under general investments. The other strategy takes a trend-following approach; it tries to capitalize on existing trends and hypothesizes that this will lead to gains. We find quite fascinating results. Bitcoin is in general a better investment vehicle over the 2013-2018 period than the S&P; its expected return is far greater.  This is the case in the general undiscriminative investment strategy. When we shift from that strategy to the trend-following strategy, we find that the returns of bitcoin investments double, while the returns of S&P investments fall by a couple percentage points. This finding is extremely significant. It says that bitcoin is a more trend-obeying asset and market than the S&P. The stock market has been alive and active for many years; and the effect of trends has been normalized and offset by investors expecting it and thus nullifying the effects; therefore the trends of the stock market are not so simple to reach and find. Bitcoin, on the other hand, is young; its trends are rife and may be followed with expectation that they will continue. We reproduce the results of this most interesting finding below in a format that more easily allows comparison.
+
+
+```{r, echo=FALSE}
+
+spy <- read.csv(file="SPY.csv")
+
+btc <- read.csv(file="btc.csv")
+
+
+#btc$Date <- as.Date(btc$Date,format="%m/%d/%Y %H:%M")
+btc$Date <-as.Date(btc$Date, format="%d-%b-%y")
+
+spy$Date <- as.Date(spy$date,format="%m/%d/%Y")
+
+
+```
+
+```{r, echo=FALSE}
+
+spy <- arrange(spy, -row_number())
+
+```
+
+```{r, echo=FALSE}
+
+index<-match('4/29/2013', spy$date)
+spy <- spy[index:nrow(spy),]
+
+```
+
+```{r, echo=FALSE}
+returns <- c()
+
+for (i in 1:nrow(btc)) {
+  r <- spy[i+22, 2]*100/spy[i, 2]
+  rr <- r - 100
+  returns <- c(returns, rr)
+  
+  
+}
+
+returns <-as.data.frame(returns)
+returns <- na.omit(returns)
+returns$id <- "30 Day $100 Investment Returns for S&P"
+#returns <- as.numeric(unlist(returns))
+#print ("Trading events")
+#print (nrow(returns))
+#print ("Average return")
+#print (lapply(returns, mean))
+
+```
+
+```{r, echo=FALSE}
+
+btc <- arrange(btc, -row_number())
+
+```
+
+```{r, echo=FALSE}
+
+btc$Close <- as.numeric(btc$Close)
+
+```
+
+```{r, echo=FALSE}
+
+returns2 <- c()
+
+for (i in 1:nrow(btc)) {
+  r <- btc[i+30, 5]*100/btc[i, 5]
+  rr <- r - 100
+  returns2 <- c(returns2, rr)
+  
+  
+}
+
+returns2 <-as.data.frame(returns2)
+returns2 <- na.omit(returns2)
+#returns <- (!(returns>10000))
+#returns <-as.data.frame(returns)
+#returns <- as.numeric(unlist(returns))
+
+returns2 <- returns2[returns2<200]
+returns2 <-as.data.frame(returns2)
+returns2$id <- "30 Day $100 Investment Returns for BTC"
+
+colnames(returns2)[1] <- "returns"
+
+#print ("Trading events")
+#print (nrow(returns))
+#print ("Average return")
+#print (lapply(returns, mean))
+
+
+```
+
+```{r, echo=FALSE}
+
+newreturns <- rbind(returns, returns2)
+
+library(ggplot2)
+
+ggplot(newreturns, aes(returns)) + geom_histogram(bins=75,
+                                               fill= '#56b4e9', col = '#e69f00',
+                                               alpha=0.6) + labs(x='Returns', y='Frequency') + facet_wrap(~id,ncol=1,scales='free_y') + theme_grey(14)
+```
+
+
+
+
+```{r, echo=FALSE}
+
+btc$daily_pct_change <- btc$Close/lag(btc$Close) - 1
+
+avg_rate <- c()
+
+for (i in 2:nrow(btc)) {
+  i <- i
+  r <- (btc[i, 8] + btc[i+1, 8] + btc[i+2, 8] + btc[i+3, 8] + btc[i+4, 8] + btc[i+5, 8] + btc[i+6, 8])/8
+  avg_rate <- c(avg_rate, r)
+  
+  
+}
+
+avg_rate <- avg_rate[!(is.na(avg_rate))]
+
+avg_rate <- c(c(0, 0, 0, 0, 0, 0, 0), avg_rate)
+#avg_rate <- c(c(0, 0, 0), avg_rate)
+
+
+btc$avg_rate <- avg_rate
+
+marker <- ((btc$avg_rate > 0.05))
+btc$marker <- marker
+#length(which(btc$marker))
+
+```
+
+
+```{r, echo=FALSE}
+
+returns3 <- c()
+
+for (i in 1:nrow(btc)) {
+  if (btc[i, 10] == TRUE){
+    r <- btc[i+30, 5]*100/btc[i, 5]
+    rr <- r - 100
+    returns3 <- c(returns3, rr)
+  }
+  
+  
+}
+
+returns3 <-as.data.frame(returns3)
+returns3 <- na.omit(returns3)
+#returns <- (!(returns>10000))
+#returns <-as.data.frame(returns)
+#returns <- as.numeric(unlist(returns))
+
+returns3 <- returns3[returns3<1000]
+returns3 <-as.data.frame(returns3)
+
+returns3$id <- "30 Day $100 Investment Returns for BTC in an Uptrend"
+
+colnames(returns3)[1] <- "returns"
+
+
+#print ("Trading events")
+#print (nrow(returns))
+#print ("Average return")
+#print (lapply(returns, mean))
+
+
+
+```
+
+
+```{r, echo=FALSE}
+
+spy$daily_pct_change <- spy$close/lag(spy$close) - 1
+
+```
+
+
+
+```{r, echo=FALSE}
+
+avg_rate <- c()
+
+for (i in 2:nrow(spy)) {
+  i <- i
+  r <- (spy[i, 8] + spy[i+1, 8] + spy[i+2, 8] + spy[+3, 8] + spy[i+4, 8] + spy[i+5, 8] + spy[i+6, 8])/8
+  avg_rate <- c(avg_rate, r)
+  
+  
+}
+
+avg_rate <- avg_rate[!(is.na(avg_rate))]
+
+avg_rate <- c(c(0, 0, 0, 0, 0, 0, 0), avg_rate)
+#avg_rate <- c(c(0, 0, 0), avg_rate)
+
+
+spy$avg_rate <- avg_rate
+
+marker <- ((spy$avg_rate > 0.0015))
+spy$marker <- marker
+#length(which(spy$marker))
+
+```
+
+
+```{r, echo=FALSE}
+
+returns4 <- c()
+
+for (i in 1:nrow(spy)) {
+  if (spy[i, 10] == TRUE){
+    r <- spy[i+30, 2]*100/spy[i, 2]
+    rr <- r - 100
+    returns4 <- c(returns4, rr)
+  }
+  
+  
+}
+
+returns4 <-as.data.frame(returns4)
+returns4 <- na.omit(returns4)
+
+returns4$id <- "30 Day $100 Investment Returns for S&P in an Uptrend"
+
+colnames(returns4)[1] <- "returns"
+
+#returns <- (!(returns>10000))
+#returns <-as.data.frame(returns)
+#returns <- as.numeric(unlist(returns))
+
+
+#print ("Trading events")
+#print (nrow(returns))
+#print ("Average return")
+#print (lapply(returns, mean))
+
+
+```
+
+```{r, echo=FALSE}
+
+newreturns2 <- rbind(returns3, returns4)
+
+library(ggplot2)
+
+ggplot(newreturns2, aes(returns)) + geom_histogram(bins=100,
+                                               fill= '#56B4E9', col = '#E69F00',
+                                               alpha=0.6) + labs(x='Returns', y='Frequency') + facet_wrap(~id,ncol=1,scales='free_y') + theme_grey(14)
+
+
+
+```
+
+
+
+
+
+
+
+
+
+## Interactive Component
+Select one (or more) of your key findings to present in an interactive format. Be selective in the choices that you present to the user; the idea is that in 5-10 minutes, users should have a good sense of the question(s) that you are interested in and the trends you've identified in the data. In other words, they should understand the value of the analysis, be it business value, scientific value, general knowledge, etc.
+
+Interactive graphs must follow all of the best practices as with static graphs in terms of perception, labeling, accuracy, etc. 
+
+You may choose the tool (D3, Shiny, or other) The complexity of your tool will be taken into account: we expect more complexity from a higher-level tool like Shiny than a lower-level tool like D3, which requires you to build a lot from scratch.   
+
+
+We include an interactive component of our investigations and data visualizations. We built multiple time-dependent interactive components.
+
+Using D3, we made a playable movie that displays the change of correlation over time, with the period in time in reference to a static display of the price level of each market. The movie can be played to show the change of correlation over time. We also include a slider bar that can be dragged to change the period in time. The dynamic changes in correlation are visualized with an attractive animation.
+
+Challenges faced -  -> We hardcoded the legend 
+                    -> We were not able to figure out how to use a line animation, and hence referenced the class                       material and chose circle to represent the transitioning.  
+                    -> We could not understand how to add text annotations on SVG element
+                    
+Link: https://bl.ocks.org/rakshita95/raw/49bd209bc85d095e6b16b5449ae2914e/f3751247214bd1611a8ecc09d5c6fec15a6d3f17/
+
+Using the Shiny app, we reproduced several of our graphs in our report but we allow the user to select the interval of time over which the price data is analyzed. Thus the user selects the start date and end date for the data to be analysed according to the user's interest. He or she can also leave the default values to 2013 or 2018, or change it using the controls on the slider.
+
+We essentially show the trends in the data for Bitcoin and S&P 500 by visualizing their graphs for Seasonality in weekly price change patterns for the date ranges chosen by the user. This is one of the options to check compare the two assets.
+
+The second option is to check the monthly price change patterns for the two assets.
+
+We also visualize an investment strategy of how the returns produced with a 30-day buy-sell investment strategy under any interval of time chosen by the user for Bitcoin and S&P 500. 
+
+We expect this to be a fascinating tool to use for the user. Our primary intention behind the tool is to make the user aware of the trends in the two assets based on historical data and gain insights for making a decision to invest in either.
+
+Link: https://ijupudy.shinyapps.io/crypto2/
+
+Challenges faced :-  -> We couldn't figure out how to add annotations to nly one of the faceted graphs in ggplot.
+                     -> We couldn't incorporate navigation bar into the UI, as we planned to navigate between                             different pages, instead we chose tabs to switch.
+                     
+
+## Conclusion
+
+We are happy with our report and we believe our analysis and interactive visualization of investment returns is strong, as well as helpful for investors. Furthermore our visualizations of correlations as well as seasonal patterns provided insights into these markets.
+
+Limitations :- 
+
+1. However, our biggest limitation was that it was difficult to come up with new visualizations for areas which are already saturated, all over the Internet, with existant visualizations. The stock market as well as now crypto markets are plotted and recorded everywhere. In line with this limitation, it was difficult to find any outstanding patterns because we are in the end dealing with financial markets: if there were patterns indeed, they would be exploited easily for a profit.
+
+2. We were able to produce good visualizations with seasonal plots and investment returns, but we felt limited by what we could do and explore. We had difficulty coming up with ideas.
+
+3. The reason we we chose to do an interactive plot with Shiny on top of D3 was because it was easier to visualise trends and compare the two assets dynamically by subsetting on the data according to the user's date range selection, and computing values on the go in the server function of R Shiny, making it more dynamic. 
+
+4. While R Shiny was easier to use for heavy computations, D3 was more useful in animations aspect of the correlation plot, making it more intuitive for the user to visualise. We wanted to explore the gganimate package in R, but chose D3 as we couldn't configure it for R version 3.4.3.
+
+
+Future Directions :-
+
+In the future, we can do similar analysis and comparisons with other cryptocurrencies. It would be interesting to see seasonal patterns of Zcash, or the investment returns for different strategies for ethereum!
+
+We had trouble finding data in the proper format for bitcoin before 2013 and hence all our analysis fell in this timeframe of 2013-2018. In the future we would extent our time period to the start of bitcoin in 2009. All else would remain the same.
+
+We also wanted to show trends for various other investment strategies like how would the returns be when investing during an Uptrend season for the two assets.
+
+We would incorporate these directions for our respective interactive components as well.
+
+Lessons learned :-
+
+We learned about the importance of proper data formats, the limitations of analysis you can do on dual time series data, and yet what sorts of things you can do in spite of this. Our interactive visualizations in particular provide a useful and fascinating look into these spaces.
+
+Getting data using an API in R, adding annotations in D3 and using Shiny was a first for all of us.
+
+We analysed temporal trends to a more finer level in order to differentiate between the trends in the data against the possible noise in the data to get a greater understanding of the graphs. 
+
+We also learned libraries like D3 and RShiny, explored their functionalities in multiple aspects. It's wonderful how powerful applications we can make using these libraries. Doing a project using these was definitely the best way to learn them. We hope to build more interactive applications based on peer feedback for the future. 
